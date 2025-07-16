@@ -7,6 +7,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 300
 max_steps = 5000
 torch.manual_seed(1337)
+n_embd = 32
 
 
 #Sets the the open TinyShakeSpeare function as f and then assigns it's contents to the variable 'text'.
@@ -17,9 +18,9 @@ with open('TinyShakeSpeare.txt', 'r', encoding='utf-8') as f:
 chars=(sorted(set(text)))
 vocab_size=(len(chars))
 
-#Creates a dictionary that maps each unique character to its corresponding index
+#Creates a dictionary that maps each unique character to its corresponding index.
 plato={ch:i for i, ch in enumerate(chars)}
-#Creates a dictionary that maps each unique index to its corresponding character
+#Creates a dictionary that maps each unique index to its corresponding character.
 socrates={i:ch for i, ch in enumerate(chars)}
 
 #'s' is the input string it takes in, 'for c in s' loops over each character in the input string, and `plato[c]` converts it to its mapped number.
@@ -37,31 +38,14 @@ train_data = data_array[:cutoff]
 #Assigns the leftover of data_array as validation data.
 val_data = data_array[cutoff:]
 
-#Both 'x' and 'y' must be equal value so the below loop doesn't fail.
-block_size = 8
+block_size = 1024
 batch_size = 32
-
-# #'x' are values of data_array from the index 0-7, totalling 8 indexes as defined in block_size.
-# # e.g. [A:0, B:1, C:2, D:3,...]
-# x = train_data[:block_size]
-
-# #'y' offsets x by 1, from index 1-9, totalling an equal 8 indexes.
-# # e.g. [0:A, 1:B, 2:C, 3:D,...]
-# y = train_data[1:block_size+1]
-
-# #Loops 8 times (the total value block_size is 8, so it loops over every value in block_size).
-# for t in range(block_size):
-#     #Using :t means it starts at up until index 0, not including index zero so no value whatsoever. Adding +1 starts it at index 0, the first value.
-#     context = x[:t+1]
-#     #using the index t means it begins in index 0 and as y is offsetted by 1 from x it starts at the second value of x and so forth, keeping it one index ahead of x, which is the target.
-#     target = y[t]
-#     print(f"Input: {context}, Target: {target}")
 
 def get_batch(split):
     #Decides if 'data' is 'train_data' or 'val_data' based on the arguments passed through 'get_batch()'.
     data = train_data if split == 'train' else val_data
 
-    # Picks 4 random starting positions (because batch_size = 4) from the training data.
+    # Picks 32 random starting positions (because batch_size = 32) from the training data.
     # Each value in randpoints is an index (a position in the data), NOT a value from the data.
     randpoints = torch.randint(len(data) - block_size, (batch_size,))
 
@@ -78,15 +62,6 @@ def get_batch(split):
     x, y = x.to(device), y.to(device)
 
     return x, y
-
-
-# #loops 4 times, and through 'c_batch[b]' in context it goes throuch each line of the tensor once.
-# for b in range(batch_size):
-#     #loops 8 times, and through 'c_batch[:n+1]' in context it goes through each number in each line of the tensor from index 0-7.
-#     for n in range(block_size):
-#         #it uses :n+1 because :n means it up to but not include n so the first loop to result in an empty tensor []. But n+1 would mean until and including index 0.
-#         context = t_batch[b, :n+1]
-#         target = v_batch[b, n]
 
 @torch.no_grad()
 def estimate_loss():
@@ -133,21 +108,42 @@ def estimate_loss():
 class BigramLanguageModel(nn.Module):
 
     #__init__ can be thought of as the ingredients/settings of the model. 
-    # Keep in mind all use vocab_size inside the model is not directly calling 'vocab_size' defined at line 11 but serves as a arbritary variable name to store the argument passed in 'model = BigramLanguageModel(vocab_size)'
-    def __init__(self, vocab_size):
+    # Invalid -> (check below fix) Keep in mind all use vocab_size inside the model is not directly calling 'vocab_size' defined at line 11 but serves as a arbritary variable name to store the argument passed in 'model = BigramLanguageModel(vocab_size)'
+    # since 'vocab_size' is already defined globally you don't need to pass it as an argument.
+    def __init__(self):
 
         #Needed to tell pytorch not to overwrite its own settings within the model's setting but to initialize its own setting and then run the model's setting.
         super().__init__()   
         
-        #Creates a 65 row table, one for each unique character in 'vocab_size' defined in line 11 (encoded), with each row containing the all the possible next character (which is 65 unique characters), resulting in a 65x65 table.
-        self.embedding_table = nn.Embedding(vocab_size, vocab_size)
+        # Creates a 65x32 tensor representing all unique characters, each with 32 unique features.
+        self.embedding_table = nn.Embedding(vocab_size, n_embd)
+
+        # Creates a 2D tensor (32x1024) to represent a unique 32 features for each possible position (0-7).
+        self.position_embedding_table = nn.Embedding(block_size, n_embd)
+
+        # Compares the 32 unique features of each character with each of the 65 possible character to provide 65 scores
+        # Each score represents the likelyhood of that character being the next token.
+        self.lm_head = nn.Linear(n_embd, vocab_size)
 
     # Note: the value of idx depends on where is this function is being called and what is being passed. 
     # You can call this function multiple times, with each output being totally unrelated to the other.
     def forward(self, idx, targets=None):
 
-        #Takes 't_batch', which is stored in variable idx, as replaces it index it in with its corresponding row.
-        logits = self.embedding_table(idx)
+        B, T = idx.shape
+
+        # Takes 't_batch', a 32x8 tensor (32 batches, 1024 tokens each), stored in the variable idx.
+        # The tensor is then passed through the embedding table to attach 32 unique features to each token.
+        tok_emb = self.embedding_table(idx)
+
+        # Assigns the 2D tensor (32x1024) representing each unique position to 'pos_emb'.
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device))
+
+        # Meshes the token embedding and the position embedding to create a unique tensor for each token at each position.
+        # Even if its the same token but with different position, it will be represented by a different tensor.
+        x = tok_emb + pos_emb
+
+        # Calls 'self.lm_head' to assign 65 scores to each token corresponding to each possible next token after comparing it with the 32 unique feature of the tokens in the tensor containing the training data. 
+        logits = self.lm_head(x)
 
         if targets == None:
             loss = None
@@ -155,10 +151,10 @@ class BigramLanguageModel(nn.Module):
             # Assigns each of the three dimension of the tensor as B (batch size), T (block size), C(all possibly probabilities).
             B, T, C = logits.shape
 
-            # Flattens a 4 batch, 8 values each, 65 probabilities per value tensor into a 1 batch, 32 values total, 65 probabilities per value tensor.
+            # Flattens a 32 batch, 1024 values each, 65 probabilities per value tensor into a 1 batch, 256 values total, 65 probabilities per value tensor.
             logits = logits.view(B*T, C)
 
-            # Flattens a 4 batch, 8 values each tensor in 1 batch, 32 values total.
+            # Flattens a 32 batch, 1024 values each tensor in 1 batch, 256 values total.
             targets = targets.view(B*T)
 
             # From all the possibile probabilities after softmaxxing, it extracts the model's confidence on the correct next token to compute the loss.
@@ -199,7 +195,7 @@ class BigramLanguageModel(nn.Module):
     
 #This passes the global 'vocab_size's value to the model's local 'vocab_size.'
 #Note: 'def __init' in the model is triggered here once automatically to setup the model. Any subsequent call to the model won't automatically trigger it again. It's a feature of python.
-model = BigramLanguageModel(vocab_size)
+model = BigramLanguageModel()
 m = model.to(device)
 
 # Uses the AdamW optimizer. This is the part where the model uses gradient descent to learn.
@@ -221,7 +217,7 @@ for steps in range(max_steps):
         # Prints losses alongside the current step.
         print(f"step {steps}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
 
-    # Assigns the first out of get_batch (which is x) and the second output of get_batch (which is y) to the corresponding value of c_batch & t_batch. 
+    # Assigns the first output of get_batch (which is x) and the second output of get_batch (which is y) to the corresponding value of c_batch & t_batch. 
     # Meaning, c_batch = x & t_batch = y.
     t_batch, v_batch = get_batch('train')
     
