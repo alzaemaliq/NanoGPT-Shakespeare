@@ -38,7 +38,7 @@ train_data = data_array[:cutoff]
 #Assigns the leftover of data_array as validation data.
 val_data = data_array[cutoff:]
 
-block_size = 1024
+block_size = 8
 batch_size = 32
 
 def get_batch(split):
@@ -169,9 +169,13 @@ class BigramLanguageModel(nn.Module):
 
         # Loops as many times as max_new_tokens is set to, each loop using the token predicted in the last loop to predict the next.
         for _ in range(max_new_tokens):
-            # 'self(idx)' automatically calls the forward function (a feature of nn.module) passing idx to it.
+
+            # Crop input to the last block_size tokens to avoid positional embedding overflow.
+            idx_cond = idx[:, -block_size:]
+
+            # Pass the cropped input to the model's forward method (triggered by self(idx_cond)),
             # It returns the logits (a three dimensional tensor consisting of batch, tokens in the batch, and 65 raw probabilities per token) and loss of idx which is then assigned to to variable of the same name respectively.
-            logits, loss = self(idx)
+            logits, loss = self(idx_cond)
 
             #It takes only takes the last token from all the batches alongside their 65 raw probability distribution.
             # : means the same as 0: its just cleaner.
