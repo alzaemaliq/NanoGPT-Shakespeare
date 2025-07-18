@@ -5,7 +5,7 @@ from torch.nn import functional as F
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 300
-max_steps = 5000
+max_steps = 9000
 torch.manual_seed(1337)
 n_embd = 32
 
@@ -104,6 +104,48 @@ def estimate_loss():
     # Return the dictionary containing the average losses of both train and val data.
     return out
 
+class Head(nn.Module):
+
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = nn.Linear(n_embd, head_size, bias=False)
+        self.query = nn.Linear(n_embd, head_size, bias=False)
+        self.value = nn.Linear(n_embd, head_size, bias=False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+
+    def forward(self, x):
+
+        # Assigns each dimensional of 3D tensor (containing both token & postional embedding) to three seperate variables.
+        B, T, C = x.shape
+
+        # Creates a new tensor with the same shape as the input tensor.
+        # Serves the purpose of representing what it contains so it can be queried.
+        k = self.key(x)
+
+        # Creates a new tensor with the same shape as the input tensor.
+        # Serves the purpor of representing what each token queries.
+        q = self.query(x)
+
+        # Compare each query with all keys to find the best match for each. Providing each a score.
+        # For each of the 32 sequences in the batch, each of the 8 tokens in that sequence, you get 8 raw scores.
+        # They represent how much that token "likes" each other token (including itself).
+        # Then multiplies each score by a decimal value to make smaller and easier to softmax.
+        wei = q @ k.transpose(-2, -1) * C**-0.5
+
+        # Prevents each token from getting context from future tokens.
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+
+        # Turns the raw attention scores into probabilities.
+        wei = F.softmax(wei, dim=-1)
+
+        # Assigns a list of 32 unique values for each token in case it is chosen.
+        v = self.value(x)
+
+        # Applies it the above line to wei.
+        out = wei @ v
+        
+        return out
+    
 #Wrap the entire model in a class so that it can contain all of the model settings (it is best practice for pytorch).
 class BigramLanguageModel(nn.Module):
 
@@ -120,6 +162,8 @@ class BigramLanguageModel(nn.Module):
 
         # Creates a 2D tensor (32x1024) to represent a unique 32 features for each possible position (0-7).
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
+
+        self.sa_head = Head(n_embd)
 
         # Compares the 32 unique features of each character with each of the 65 possible character to provide 65 scores
         # Each score represents the likelyhood of that character being the next token.
@@ -141,6 +185,8 @@ class BigramLanguageModel(nn.Module):
         # Meshes the token embedding and the position embedding to create a unique tensor for each token at each position.
         # Even if its the same token but with different position, it will be represented by a different tensor.
         x = tok_emb + pos_emb
+
+        x = self.sa_head(x)
 
         # Calls 'self.lm_head' to assign 65 scores to each token corresponding to each possible next token after comparing it with the 32 unique feature of the tokens in the tensor containing the training data. 
         logits = self.lm_head(x)
