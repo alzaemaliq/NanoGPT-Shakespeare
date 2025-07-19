@@ -113,7 +113,7 @@ class BigramLanguageModel(nn.Module):
 
 # --- LOAD MODEL --- #
 model = BigramLanguageModel()
-model.load_state_dict(torch.load('shakespeare2_gpt.pth'))
+model.load_state_dict(torch.load('shakespeare_gpt.pth'))
 model.to(device)
 model.eval()
 
