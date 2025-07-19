@@ -118,7 +118,7 @@ model.to(device)
 model.eval()
 
 # --- INFERENCE --- #
-prompt = "ROMEO:"
+prompt = input()
 context = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
 
 print(prompt, end='', flush=True)
