@@ -1,3 +1,6 @@
+**Try it live here:**  
+👉 [https://huggingface.co/spaces/alzaemaliq/NanoGPT-Shakespeare](https://huggingface.co/spaces/alzaemaliq/NanoGPT-Shakespeare)
+
 # NanoGPT-Shakespeare
 
 This is a basic reimplementation of the "Attention Is All You Need" paper, focused on the decoder-only transformer architecture used in GPT models. The model is trained from scratch on the Tiny Shakespeare dataset using character-level tokenization.
