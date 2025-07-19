@@ -4,11 +4,17 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-eval_iters = 300
+eval_iters = 100
 max_steps = 9000
-torch.manual_seed(1337)
-n_embd = 32
+n_embd = 128
+dropout = 0.1
+n_head = 4
+n_layer = 4
+block_size = 64
+batch_size = 16
 
+# For reproducibility.
+# torch.manual_seed(1337)
 
 #Sets the the open TinyShakeSpeare function as f and then assigns it's contents to the variable 'text'.
 with open('TinyShakeSpeare.txt', 'r', encoding='utf-8') as f:
@@ -38,9 +44,6 @@ train_data = data_array[:cutoff]
 #Assigns the leftover of data_array as validation data.
 val_data = data_array[cutoff:]
 
-block_size = 8
-batch_size = 32
-
 def get_batch(split):
     #Decides if 'data' is 'train_data' or 'val_data' based on the arguments passed through 'get_batch()'.
     data = train_data if split == 'train' else val_data
@@ -49,8 +52,8 @@ def get_batch(split):
     # Each value in randpoints is an index (a position in the data), NOT a value from the data.
     randpoints = torch.randint(len(data) - block_size, (batch_size,))
 
-    # For each random starting index, grab a sequence of 8 characters (not the index itself, but the values from those positions).
-    # Example: if i = 2, this grabs data[2:10] → 8 character *values* starting at position 2.
+    # For each random starting index, grab a sequence of 16 characters (not the index itself, but the values from those positions).
+    # Example: if i = 2, this grabs data[2:18] → 16 character *values* starting at position 2.
     x = torch.stack([data[i:i + block_size] for i in randpoints])
 
     # y is just like x, but shifted one character to the right.
@@ -70,7 +73,7 @@ def estimate_loss():
     out = {}
     
     # Set the model to evaulation mode for accurate results.
-    model.eval()
+    m.eval()
 
     # Loops twice, once using train data, once using val data.
     for split in ['train', 'val']:
@@ -89,7 +92,7 @@ def estimate_loss():
 
             # Passes the result of get_batch to the forward function in the bigram model.
             # It returns a 2D tensor of the data (either train or val) and it's loss compared to the correct target token.
-            logits, loss = model(X, Y)
+            logits, loss = m(X, Y)
 
             # Converts the loss tensor into a normal python number.
             losses[k] = loss.item()
@@ -99,7 +102,7 @@ def estimate_loss():
         out[split] = losses.mean()
     
     # Return the model to training mode so no errors occur.
-    model.train()
+    m.train()
     
     # Return the dictionary containing the average losses of both train and val data.
     return out
@@ -113,7 +116,7 @@ class Head(nn.Module):
         self.value = nn.Linear(n_embd, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
 
-        self.dropout = nn.Dropout(0.0)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
 
@@ -129,7 +132,7 @@ class Head(nn.Module):
         q = self.query(x)
 
         # Compare each query with all keys to find the best match for each. Providing each a score.
-        # For each of the 32 sequences in the batch, each of the 8 tokens in that sequence, you get 8 raw scores.
+        # For each of the 32 sequences in the batch, each of the 16 tokens in that sequence, you get 16 raw scores.
         # They represent how much that token "likes" each other token (including itself).
         # Then multiplies each score by a decimal value to make smaller and easier to softmax.
         wei = q @ k.transpose(-2, -1) * C**-0.5
@@ -149,8 +152,73 @@ class Head(nn.Module):
         out = wei @ v
         
         return out
-    
-#Wrap the entire model in a class so that it can contain all of the model settings (it is best practice for pytorch).
+
+class MultiHeadAttention(nn.Module):
+
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+
+        # Creates 4 attention heads.
+        # Each head takes in (32, 64, 128) and returns (32, 64, 32).
+        # The 4 outputs are then joined together into (32, 64, 128).
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+
+        # Takes the joined (32, 64, 128) from all heads and mixes their info together.
+        # The shape stays (32, 64, 128), but now each position sees across all heads.
+        self.proj = nn.Linear(n_embd, n_embd)
+
+        # Randomly removes values from the (32, 64, 128) tensor to prevent overfitting.
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+
+        # Passes input through all 4 heads, each returning (32, 64, 32)
+        # Joins them side-by-side into (32, 64, 128)
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+
+        # Calls 'self.proj' to mix the 4 heads' results together while keeping shape (32, 64, 128) while randomly dropping some values during.
+        out = self.dropout(self.proj(out))
+
+        return out
+
+class FeedForward(nn.Module):
+
+    def __init__(self, n_embd):
+        super().__init__()
+
+        # First makes the last number in the tensor bigger (128 → 512) so it can more accurate tweak the probabilites.
+        # Then brings it back to 128 to match the original shape.
+        # Final shape stays the same, but with more accurate values.
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.GELU(),
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+
+        # Passes the input through 'self.net'.
+        return self.net(x)
+
+class Block(nn.Module):
+
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+        # Splits the 128 features evenly across 4 heads (32 features per head.)
+        # Helps seperate head focus on seperate parts of the each token's feature and learn more specific patterns.
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+
+    def forward(self, x):
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
+
+# Wrap the entire model in a class so that it can contain all of the model settings (it is best practice for pytorch).
 class BigramLanguageModel(nn.Module):
 
     #__init__ can be thought of as the ingredients/settings of the model. 
@@ -161,15 +229,16 @@ class BigramLanguageModel(nn.Module):
         #Needed to tell pytorch not to overwrite its own settings within the model's setting but to initialize its own setting and then run the model's setting.
         super().__init__()   
         
-        # Creates a 65x32 tensor representing all unique characters, each with 32 unique features.
+        # Creates a 65x128 tensor representing all unique characters, each with 32 unique features.
         self.embedding_table = nn.Embedding(vocab_size, n_embd)
 
-        # Creates a 2D tensor (32x1024) to represent a unique 32 features for each possible position (0-7).
+        # Creates a 2D tensor (16x128) to represent a unique 128 features for each possible position (0-17).
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
 
-        self.sa_head = Head(n_embd)
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embd)
 
-        # Compares the 32 unique features of each character with each of the 65 possible character to provide 65 scores
+        # Compares the 128 unique features of each character with each of the 65 possible character to provide 65 scores
         # Each score represents the likelyhood of that character being the next token.
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
@@ -179,20 +248,22 @@ class BigramLanguageModel(nn.Module):
 
         B, T = idx.shape
 
-        # Takes 't_batch', a 32x8 tensor (32 batches, 1024 tokens each), stored in the variable idx.
+        # Takes 't_batch', a 32x16 tensor (32 batches, 16 tokens each), stored in the variable idx.
         # The tensor is then passed through the embedding table to attach 32 unique features to each token.
         tok_emb = self.embedding_table(idx)
 
-        # Assigns the 2D tensor (32x1024) representing each unique position to 'pos_emb'.
+        # Assigns the 2D tensor (32x16) representing each unique position to 'pos_emb'.
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))
 
         # Meshes the token embedding and the position embedding to create a unique tensor for each token at each position.
         # Even if its the same token but with different position, it will be represented by a different tensor.
         x = tok_emb + pos_emb
 
-        x = self.sa_head(x)
+        x = self.blocks(x)
 
-        # Calls 'self.lm_head' to assign 65 scores to each token corresponding to each possible next token after comparing it with the 32 unique feature of the tokens in the tensor containing the training data. 
+        x = self.ln_f(x)
+
+        # Calls 'self.lm_head' to assign 65 scores to each token corresponding to each possible next token after comparing it with the 128 unique feature of the tokens in the tensor containing the training data. 
         logits = self.lm_head(x)
 
         if targets == None:
@@ -201,10 +272,10 @@ class BigramLanguageModel(nn.Module):
             # Assigns each of the three dimension of the tensor as B (batch size), T (block size), C(all possibly probabilities).
             B, T, C = logits.shape
 
-            # Flattens a 32 batch, 1024 values each, 65 probabilities per value tensor into a 1 batch, 256 values total, 65 probabilities per value tensor.
+            # Flattens a 32 batch, 16 values each, 65 probabilities per value tensor into a 1 batch, 512 values total, 65 probabilities per value tensor.
             logits = logits.view(B*T, C)
 
-            # Flattens a 32 batch, 1024 values each tensor in 1 batch, 256 values total.
+            # Flattens a 32 batch, 16 values each tensor to a  1 batch, 512 values total 2D tensor.
             targets = targets.view(B*T)
 
             # From all the possibile probabilities after softmaxxing, it extracts the model's confidence on the correct next token to compute the loss.
@@ -292,6 +363,9 @@ for steps in range(max_steps):
     
     # Takes the average loss outputted by the forward function in the model (a 1-element tensor) and converts it into a plain python number.
     # print(loss.item())
+
+# Save the model.
+torch.save(m.state_dict(), 'shakespeare_gpt.pth')
 
 # Creates the prompt: a tensor of shape (1, 1) containing just the token [[0]]. torch.zeros automatically fills an empty tensor with 0's.
 # dtype=torch.long ensures the input is an integer and not a float.
