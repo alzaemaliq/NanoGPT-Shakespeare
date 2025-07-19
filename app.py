@@ -119,7 +119,7 @@ model.to(device)
 model.eval()
 
 # Streamlit UI
-st.title("🖋️ NanoGPT-Shakespeare")
+st.title("NanoGPT-Shakespeare")
 prompt = st.text_input("Enter your prompt:")
 max_tokens = st.slider("Max tokens to generate", 10, 1000, 200, step=10)
 
