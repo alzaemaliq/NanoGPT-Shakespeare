@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-# --- CONFIG --- #
+# --- Config --- #
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 n_embd = 128
 dropout = 0.1
@@ -10,7 +10,7 @@ n_head = 4
 n_layer = 4
 block_size = 64
 
-# --- LOAD CHAR VOCAB --- #
+# Load & Tokenize Dataset
 with open('TinyShakeSpeare.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 chars = sorted(set(text))
@@ -20,7 +20,7 @@ itos = {i: ch for i, ch in enumerate(chars)}
 encode = lambda s: [stoi[c] for c in s]
 decode = lambda l: ''.join(itos[i] for i in l)
 
-# --- MODEL ARCHITECTURE --- #
+# Model Architecture
 class Head(nn.Module):
     def __init__(self, head_size):
         super().__init__()
@@ -111,13 +111,13 @@ class BigramLanguageModel(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
             yield idx_next[0].item()  # stream one token at a time
 
-# --- LOAD MODEL --- #
+# Load Model
 model = BigramLanguageModel()
 model.load_state_dict(torch.load('shakespeare_gpt.pth'))
 model.to(device)
 model.eval()
 
-# --- INFERENCE --- #
+# Inference
 prompt = input()
 context = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
 
