@@ -327,7 +327,7 @@ m = model.to(device)
 # model.parameters() passes to the model which weights needed to be updated for lower loss.
 # A learning rate of 1e-3 0.001. So if the gradient (proposed change to weights by AdamW is -0.02, you times it with the learning rate).
 # This allows for smaller steps within gradient space so the model doesnt overshoot and fall into a local minima's.
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+optimizer = torch.optim.AdamW(m.parameters(), lr=1e-3)
 
 for steps in range(max_steps):
 
@@ -349,7 +349,7 @@ for steps in range(max_steps):
     # Passes both the training data and the validation data into the model and expects two outputs: 
     # 1. A transformed logits (the flattened embedding table)
     # 2. The loss between the predicted next token and the actual target token.
-    logits, loss = model(t_batch, v_batch)
+    logits, loss = m(t_batch, v_batch)
 
     # Clears old gradients from the last step.
     # Gradients are how much the optimizer tells the embedding table to tweak weights by. Stored in model.embedding_table.weight.grad
@@ -377,4 +377,4 @@ context = torch.zeros((1, 1), dtype=torch.long, device=device)
 # .tolist() converts the tensor to a regular Python list of token indices.
 # decode converts that list of token indices back into readable characters using the vocab map and prints it.
 # Viva la GPT. Holy shit that took forever.
-print(decode(model.generate(context, max_new_tokens=1000)[0].tolist()))
+print(decode(m.generate(context, max_new_tokens=1000)[0].tolist()))
