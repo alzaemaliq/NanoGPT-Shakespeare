@@ -113,6 +113,8 @@ class Head(nn.Module):
         self.value = nn.Linear(n_embd, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
 
+        self.dropout = nn.Dropout(0.0)
+
     def forward(self, x):
 
         # Assigns each dimensional of 3D tensor (containing both token & postional embedding) to three seperate variables.
@@ -137,6 +139,8 @@ class Head(nn.Module):
 
         # Turns the raw attention scores into probabilities.
         wei = F.softmax(wei, dim=-1)
+
+        wei = self.dropout(wei)
 
         # Assigns a list of 32 unique values for each token in case it is chosen.
         v = self.value(x)
